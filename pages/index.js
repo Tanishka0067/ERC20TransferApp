@@ -1,115 +1,266 @@
-import Image from "next/image";
-import localFont from "next/font/local";
+import React, { useState, useEffect } from "react";
+import { ethers } from "ethers";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
+import { Wallet, Send, AlertCircle, CheckCircle2, Loader2 } from "lucide-react";
 
-const geistSans = localFont({
-  src: "./fonts/GeistVF.woff",
-  variable: "--font-geist-sans",
-  weight: "100 900",
-});
-const geistMono = localFont({
-  src: "./fonts/GeistMonoVF.woff",
-  variable: "--font-geist-mono",
-  weight: "100 900",
-});
+const ERC20_ABI = [
+  "function balanceOf(address owner) view returns (uint256)",
+  "function decimals() view returns (uint8)",
+  "function symbol() view returns (string)",
+  "function transfer(address to, uint amount) returns (bool)",
+  "function allowance(address owner, address spender) view returns (uint256)",
+  "event Transfer(address indexed from, address indexed to, uint amount)",
+];
 
-export default function Home() {
+const TransactionStatus = {
+  NONE: "none",
+  PENDING: "pending",
+  CONFIRMED: "confirmed",
+  FAILED: "failed",
+};
+
+export default function TokenTransfer() {
+  const [account, setAccount] = useState("");
+  const [tokenContract, setTokenContract] = useState(null);
+  const [tokenSymbol, setTokenSymbol] = useState("");
+  const [balance, setBalance] = useState("0");
+  const [recipient, setRecipient] = useState("");
+  const [amount, setAmount] = useState("");
+  const [txStatus, setTxStatus] = useState(TransactionStatus.NONE);
+  const [txHash, setTxHash] = useState("");
+  const [error, setError] = useState("");
+  const [estimatedTime, setEstimatedTime] = useState(null);
+
+  useEffect(() => {
+    const loadSavedTxState = () => {
+      const savedTx = localStorage.getItem("currentTransaction");
+      if (savedTx) {
+        const txData = JSON.parse(savedTx);
+        setTxHash(txData.hash);
+        setTxStatus(txData.status);
+        monitorTransaction(txData.hash);
+      }
+    };
+
+    loadSavedTxState();
+
+    window.addEventListener("storage", (e) => {
+      if (e.key === "currentTransaction") {
+        const txData = JSON.parse(e.newValue);
+        setTxHash(txData.hash);
+        setTxStatus(txData.status);
+      }
+    });
+  }, []);
+
+  const connectWallet = async () => {
+    try {
+      if (!window.ethereum) {
+        throw new Error("Please install MetaMask to use this app");
+      }
+
+      const provider = new ethers.BrowserProvider(window.ethereum);
+      const accounts = await provider.send("eth_requestAccounts", []);
+      setAccount(accounts[0]);
+
+      const tokenAddress = "0x6B175474E89094C44Da98b954EedeAC495271d0F";
+      const contract = new ethers.Contract(tokenAddress, ERC20_ABI, provider);
+      setTokenContract(contract);
+
+      const symbol = await contract.symbol();
+      setTokenSymbol(symbol);
+
+      const balance = await contract.balanceOf(accounts[0]);
+      const decimals = await contract.decimals();
+      setBalance(ethers.formatUnits(balance, decimals));
+    } catch (err) {
+      setError(err.message);
+    }
+  };
+
+  const monitorTransaction = async (hash) => {
+    try {
+      const provider = new ethers.BrowserProvider(window.ethereum);
+      const tx = await provider.getTransaction(hash);
+
+      const gasPrice = await provider.getGasPrice();
+      const estimatedMins = Math.ceil((Number(gasPrice) / 1e9) * 2);
+      setEstimatedTime(estimatedMins);
+
+      const receipt = await tx.wait();
+
+      if (receipt.status === 1) {
+        setTxStatus(TransactionStatus.CONFIRMED);
+        updateLocalStorage(hash, TransactionStatus.CONFIRMED);
+      } else {
+        setTxStatus(TransactionStatus.FAILED);
+        updateLocalStorage(hash, TransactionStatus.FAILED);
+      }
+    } catch (err) {
+      setTxStatus(TransactionStatus.FAILED);
+      updateLocalStorage(hash, TransactionStatus.FAILED);
+      setError(err.message);
+    }
+  };
+
+  const updateLocalStorage = (hash, status) => {
+    const txData = { hash, status };
+    localStorage.setItem("currentTransaction", JSON.stringify(txData));
+  };
+
+  const sendTokens = async () => {
+    try {
+      if (!tokenContract || !recipient || !amount) {
+        throw new Error("Please fill in all fields");
+      }
+
+      const provider = new ethers.BrowserProvider(window.ethereum);
+      const signer = await provider.getSigner();
+      const contract = tokenContract.connect(signer);
+
+      const decimals = await contract.decimals();
+      const amountInWei = ethers.parseUnits(amount, decimals);
+
+      const tx = await contract.transfer(recipient, amountInWei);
+      setTxHash(tx.hash);
+      setTxStatus(TransactionStatus.PENDING);
+      updateLocalStorage(tx.hash, TransactionStatus.PENDING);
+
+      monitorTransaction(tx.hash);
+    } catch (err) {
+      setError(err.message);
+    }
+  };
+
   return (
-    <div
-      className={`${geistSans.variable} ${geistMono.variable} grid grid-rows-[20px_1fr_20px] items-center justify-items-center min-h-screen p-8 pb-20 gap-16 sm:p-20 font-[family-name:var(--font-geist-sans)]`}
-    >
-      <main className="flex flex-col gap-8 row-start-2 items-center sm:items-start">
-        <Image
-          className="dark:invert"
-          src="/next.svg"
-          alt="Next.js logo"
-          width={180}
-          height={38}
-          priority
-        />
-        <ol className="list-inside list-decimal text-sm text-center sm:text-left font-[family-name:var(--font-geist-mono)]">
-          <li className="mb-2">
-            Get started by editing{" "}
-            <code className="bg-black/[.05] dark:bg-white/[.06] px-1 py-0.5 rounded font-semibold">
-              pages/index.js
-            </code>
-            .
-          </li>
-          <li>Save and see your changes instantly.</li>
-        </ol>
+    <div className="min-h-screen bg-gradient-to-br from-gray-900 to-gray-800 flex items-center justify-center p-4">
+      <Card className="w-full max-w-lg backdrop-blur-lg bg-white/10 border-0 shadow-2xl">
+        <CardHeader className="space-y-1 text-center">
+          <CardTitle className="text-3xl font-bold bg-gradient-to-r from-blue-400 to-purple-600 bg-clip-text text-transparent">
+            Send {tokenSymbol || "ERC20"} Tokens
+          </CardTitle>
+          <p className="text-gray-400">
+            Transfer tokens securely to any address
+          </p>
+        </CardHeader>
+        <CardContent>
+          {!account ? (
+            <Button
+              onClick={connectWallet}
+              className="w-full bg-gradient-to-r from-blue-500 to-purple-600 hover:from-blue-600 hover:to-purple-700 transition-all duration-300 transform hover:scale-[1.02] text-white font-medium py-6"
+            >
+              <Wallet className="mr-2 h-5 w-5" />
+              Connect Wallet
+            </Button>
+          ) : (
+            <div className="space-y-6">
+              <div className="bg-gray-800/50 rounded-lg p-4 backdrop-blur-sm">
+                <p className="text-gray-400">Connected Account</p>
+                <p className="text-lg font-mono text-gray-200">
+                  {account.slice(0, 6)}...{account.slice(-4)}
+                </p>
+                <div className="mt-2 flex items-center">
+                  <div className="h-2 w-2 rounded-full bg-green-400 animate-pulse mr-2" />
+                  <p className="text-xl font-semibold text-gray-200">
+                    {balance}{" "}
+                    <span className="text-blue-400">{tokenSymbol}</span>
+                  </p>
+                </div>
+              </div>
 
-        <div className="flex gap-4 items-center flex-col sm:flex-row">
-          <a
-            className="rounded-full border border-solid border-transparent transition-colors flex items-center justify-center bg-foreground text-background gap-2 hover:bg-[#383838] dark:hover:bg-[#ccc] text-sm sm:text-base h-10 sm:h-12 px-4 sm:px-5"
-            href="https://vercel.com/new?utm_source=create-next-app&utm_medium=default-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            <Image
-              className="dark:invert"
-              src="/vercel.svg"
-              alt="Vercel logomark"
-              width={20}
-              height={20}
-            />
-            Deploy now
-          </a>
-          <a
-            className="rounded-full border border-solid border-black/[.08] dark:border-white/[.145] transition-colors flex items-center justify-center hover:bg-[#f2f2f2] dark:hover:bg-[#1a1a1a] hover:border-transparent text-sm sm:text-base h-10 sm:h-12 px-4 sm:px-5 sm:min-w-44"
-            href="https://nextjs.org/docs?utm_source=create-next-app&utm_medium=default-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            Read our docs
-          </a>
-        </div>
-      </main>
-      <footer className="row-start-3 flex gap-6 flex-wrap items-center justify-center">
-        <a
-          className="flex items-center gap-2 hover:underline hover:underline-offset-4"
-          href="https://nextjs.org/learn?utm_source=create-next-app&utm_medium=default-template-tw&utm_campaign=create-next-app"
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          <Image
-            aria-hidden
-            src="/file.svg"
-            alt="File icon"
-            width={16}
-            height={16}
-          />
-          Learn
-        </a>
-        <a
-          className="flex items-center gap-2 hover:underline hover:underline-offset-4"
-          href="https://vercel.com/templates?framework=next.js&utm_source=create-next-app&utm_medium=default-template-tw&utm_campaign=create-next-app"
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          <Image
-            aria-hidden
-            src="/window.svg"
-            alt="Window icon"
-            width={16}
-            height={16}
-          />
-          Examples
-        </a>
-        <a
-          className="flex items-center gap-2 hover:underline hover:underline-offset-4"
-          href="https://nextjs.org?utm_source=create-next-app&utm_medium=default-template-tw&utm_campaign=create-next-app"
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          <Image
-            aria-hidden
-            src="/globe.svg"
-            alt="Globe icon"
-            width={16}
-            height={16}
-          />
-          Go to nextjs.org →
-        </a>
-      </footer>
+              <Input
+                placeholder="Recipient Address"
+                value={recipient}
+                onChange={(e) => setRecipient(e.target.value)}
+                className="bg-gray-800/30 border-gray-700 text-gray-200 placeholder-gray-500 focus:ring-blue-500 focus:border-blue-500"
+              />
+
+              <Input
+                placeholder="Amount"
+                type="number"
+                value={amount}
+                onChange={(e) => setAmount(e.target.value)}
+                className="bg-gray-800/30 border-gray-700 text-gray-200 placeholder-gray-500 focus:ring-blue-500 focus:border-blue-500"
+              />
+
+              <Button
+                onClick={sendTokens}
+                className="w-full bg-gradient-to-r from-blue-500 to-purple-600 hover:from-blue-600 hover:to-purple-700 transition-all duration-300 transform hover:scale-[1.02] disabled:opacity-50 disabled:cursor-not-allowed disabled:transform-none py-6"
+                disabled={txStatus === TransactionStatus.PENDING}
+              >
+                {txStatus === TransactionStatus.PENDING ? (
+                  <Loader2 className="mr-2 h-5 w-5 animate-spin" />
+                ) : (
+                  <Send className="mr-2 h-5 w-5" />
+                )}
+                {txStatus === TransactionStatus.PENDING
+                  ? "Processing..."
+                  : "Send Tokens"}
+              </Button>
+
+              {txStatus !== TransactionStatus.NONE && (
+                <div
+                  className={`rounded-lg p-4 backdrop-blur-sm transition-all duration-300 ${
+                    txStatus === TransactionStatus.CONFIRMED
+                      ? "bg-green-500/20 border border-green-500/30"
+                      : txStatus === TransactionStatus.FAILED
+                      ? "bg-red-500/20 border border-red-500/30"
+                      : "bg-blue-500/20 border border-blue-500/30"
+                  }`}
+                >
+                  <div className="flex items-center">
+                    {txStatus === TransactionStatus.CONFIRMED && (
+                      <CheckCircle2 className="h-5 w-5 text-green-400 mr-2" />
+                    )}
+                    {txStatus === TransactionStatus.PENDING && (
+                      <Loader2 className="h-5 w-5 text-blue-400 animate-spin mr-2" />
+                    )}
+                    {txStatus === TransactionStatus.FAILED && (
+                      <AlertCircle className="h-5 w-5 text-red-400 mr-2" />
+                    )}
+                    <p className="font-medium text-gray-200">
+                      {txStatus === TransactionStatus.PENDING &&
+                        "Transaction Pending"}
+                      {txStatus === TransactionStatus.CONFIRMED &&
+                        "Transaction Confirmed"}
+                      {txStatus === TransactionStatus.FAILED &&
+                        "Transaction Failed"}
+                    </p>
+                  </div>
+                  <div className="mt-2 text-sm text-gray-400">
+                    {txStatus === TransactionStatus.PENDING &&
+                      estimatedTime &&
+                      `Estimated confirmation time: ~${estimatedTime} minutes`}
+                    {txHash && (
+                      <a
+                        href={`https://etherscan.io/tx/${txHash}`}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="block mt-2 text-blue-400 hover:text-blue-300 transition-colors"
+                      >
+                        View on Etherscan →
+                      </a>
+                    )}
+                  </div>
+                </div>
+              )}
+
+              {error && (
+                <div className="bg-red-500/20 border border-red-500/30 rounded-lg p-4 backdrop-blur-sm">
+                  <div className="flex items-center">
+                    <AlertCircle className="h-5 w-5 text-red-400 mr-2" />
+                    <p className="font-medium text-gray-200">Error</p>
+                  </div>
+                  <p className="mt-2 text-sm text-gray-400">{error}</p>
+                </div>
+              )}
+            </div>
+          )}
+        </CardContent>
+      </Card>
     </div>
   );
 }
